@@ -6,6 +6,9 @@
     <meta name="theme-color" content="#06163a">
     <meta name="description" content="Lagos Padel Club is coming soon. A new home for padel, community, and competition in Lagos.">
     <title>Lagos Padel Club | Coming Soon</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
     <style>
         :root {
             --navy: #06163a;
