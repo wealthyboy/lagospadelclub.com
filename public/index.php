@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#06163a">
-    <meta name="description" content="Lagos Padel Club is coming soon. A new home for padel, community, and competition in Lagos.">
+    <meta name="description" content="Lagos Padel Club is coming soon: a new community for players to play, compete and connect in Lagos.">
     <title>Lagos Padel Club | Coming Soon</title>
     <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
     <link rel="icon" type="image/png" sizes="192x192" href="favicon-192.png">
@@ -147,6 +147,29 @@
             animation: pulse 2s ease-in-out infinite;
         }
 
+        .register-link {
+            display: inline-flex;
+            min-height: 52px;
+            margin-top: 2rem;
+            padding: 0 1.6rem;
+            border-radius: 999px;
+            color: var(--navy);
+            background: var(--yellow);
+            align-items: center;
+            justify-content: center;
+            font-size: .75rem;
+            font-weight: 900;
+            letter-spacing: .13em;
+            text-decoration: none;
+            text-transform: uppercase;
+            transition: transform .2s ease, box-shadow .2s ease;
+        }
+
+        .register-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 14px 30px rgba(255, 212, 0, .2);
+        }
+
         footer {
             display: flex;
             color: rgba(255, 255, 255, .46);
@@ -249,13 +272,15 @@
             <header class="mini-brand">Lagos Padel Club</header>
 
             <div class="copy">
-                <p class="eyebrow">A new court is taking shape</p>
-                <h1>Game on.<span>Coming soon.</span></h1>
+                <p class="eyebrow">Lagos Padel Club is taking shape</p>
+                <h1>Your game.<span>Your club.</span></h1>
                 <p class="intro">
-                    Lagos is getting a new home for padel, competition and community.
-                    We are building something special. Stay close.
+                    A new padel community is coming to Lagos, bringing players
+                    together to play, compete and connect. The courts are getting
+                    ready. The club is coming to life. Stay close.
                 </p>
-                <div class="status">Opening in Lagos</div>
+                <div class="status">Opening soon in Lagos</div>
+                <a class="register-link" href="register.php">Register for membership</a>
             </div>
 
             <footer>
