@@ -42,6 +42,28 @@ function formatLabel(string $value): string
     return ucwords(str_replace('_', ' ', $value));
 }
 
+function validDate(string $value): bool
+{
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+
+    return $date !== false && $date->format('Y-m-d') === $value;
+}
+
+function validPhone(string $value): bool
+{
+    $digits = preg_replace('/\D+/', '', $value);
+
+    return preg_match('/^\+?[0-9\s().-]+$/', $value) === 1
+        && strlen((string) $digits) >= 7
+        && strlen((string) $digits) <= 15;
+}
+
+function addError(array &$errors, array &$fieldErrors, string $field, string $message): void
+{
+    $errors[] = $message;
+    $fieldErrors[$field] = $message;
+}
+
 function buildEmail(array $details, array $photo, string $boundary): string
 {
     $rows = '';
@@ -98,6 +120,7 @@ if (empty($_SESSION['registration_token'])) {
 }
 
 $errors = [];
+$fieldErrors = [];
 $success = isset($_GET['submitted']);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -129,14 +152,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     foreach ($required as $name => $label) {
         if (rawField($name) === '') {
-            $errors[] = "{$label} is required.";
+            addError($errors, $fieldErrors, $name, "{$label} is required.");
         }
     }
 
     $email = filter_var(rawField('email'), FILTER_VALIDATE_EMAIL);
 
     if ($email === false || preg_match('/[\r\n]/', rawField('email'))) {
-        $errors[] = 'Enter a valid email address.';
+        addError($errors, $fieldErrors, 'email', 'Enter a valid email address.');
+    }
+
+    foreach ([
+        'full_name' => 120,
+        'preferred_name' => 80,
+        'email' => 190,
+        'mobile_number' => 30,
+        'whatsapp' => 30,
+        'linkedin' => 255,
+        'instagram' => 80,
+        'occupation' => 120,
+        'company_name' => 120,
+        'position' => 120,
+        'emergency_name' => 120,
+        'emergency_relationship' => 80,
+        'emergency_phone' => 30,
+        'inviting_member' => 120,
+        'supporting_member_1' => 120,
+        'supporting_member_2' => 120,
+        'supporting_member_3' => 120,
+        'signature' => 120,
+    ] as $name => $maximum) {
+        if (mb_strlen(rawField($name)) > $maximum) {
+            addError($errors, $fieldErrors, $name, formatLabel($name) . " must not exceed {$maximum} characters.");
+        }
+    }
+
+    foreach ([
+        'full_name' => 'Full name',
+        'emergency_name' => 'Emergency contact name',
+        'signature' => 'Signature',
+    ] as $name => $label) {
+        $value = rawField($name);
+
+        if ($value !== '' && preg_match("/^[\\p{L}\\p{M}][\\p{L}\\p{M} .'-]{1,119}$/u", $value) !== 1) {
+            addError($errors, $fieldErrors, $name, "{$label} may contain only letters, spaces, apostrophes, hyphens and periods.");
+        }
+    }
+
+    foreach ([
+        'mobile_number' => 'Mobile number',
+        'whatsapp' => 'WhatsApp number',
+        'emergency_phone' => 'Emergency contact phone',
+    ] as $name => $label) {
+        $value = rawField($name);
+
+        if ($value !== '' && !validPhone($value)) {
+            addError($errors, $fieldErrors, $name, "Enter a valid {$label}.");
+        }
+    }
+
+    $linkedin = rawField('linkedin');
+
+    if ($linkedin !== '' && filter_var($linkedin, FILTER_VALIDATE_URL) === false) {
+        addError($errors, $fieldErrors, 'linkedin', 'Enter a complete LinkedIn URL beginning with http:// or https://.');
+    }
+
+    $dateOfBirth = rawField('date_of_birth');
+
+    if ($dateOfBirth !== '' && (!validDate($dateOfBirth) || $dateOfBirth >= date('Y-m-d'))) {
+        addError($errors, $fieldErrors, 'date_of_birth', 'Enter a valid date of birth in the past.');
+    }
+
+    $declarationDate = rawField('declaration_date');
+
+    if ($declarationDate !== '' && (!validDate($declarationDate) || $declarationDate > date('Y-m-d'))) {
+        addError($errors, $fieldErrors, 'declaration_date', 'Declaration date cannot be in the future.');
     }
 
     $allowedLevels = ['beginner', 'intermediate', 'advanced'];
@@ -144,37 +234,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $allowedPathways = ['standard_admission', 'curated_entry'];
 
     if (!in_array(rawField('playing_level'), $allowedLevels, true)) {
-        $errors[] = 'Choose a valid playing level.';
+        addError($errors, $fieldErrors, 'playing_level', 'Choose a valid playing level.');
     }
 
     if (!in_array(rawField('media_consent'), $allowedConsent, true)) {
-        $errors[] = 'Choose a valid media consent option.';
+        addError($errors, $fieldErrors, 'media_consent', 'Choose a valid media consent option.');
     }
 
     if (!in_array(rawField('admission_pathway'), $allowedPathways, true)) {
-        $errors[] = 'Choose a valid admission pathway.';
+        addError($errors, $fieldErrors, 'admission_pathway', 'Choose a valid admission pathway.');
+    }
+
+    if (rawField('admission_pathway') === 'standard_admission') {
+        foreach ([
+            'inviting_member' => 'Inviting member',
+            'supporting_member_1' => 'Supporting member 1',
+            'supporting_member_2' => 'Supporting member 2',
+            'supporting_member_3' => 'Supporting member 3',
+        ] as $name => $label) {
+            if (rawField($name) === '') {
+                addError($errors, $fieldErrors, $name, "{$label} is required for standard admission.");
+            }
+        }
     }
 
     foreach (['fitness_declaration', 'sport_acknowledgement', 'liability_release', 'club_declaration'] as $declaration) {
         if (rawField($declaration) !== '1') {
-            $errors[] = 'All health, liability and club declarations must be accepted.';
+            addError($errors, $fieldErrors, $declaration, 'All health, liability and club declarations must be accepted.');
             break;
         }
+    }
+
+    $normalizedName = preg_replace('/\s+/', ' ', mb_strtolower(rawField('full_name')));
+    $normalizedSignature = preg_replace('/\s+/', ' ', mb_strtolower(rawField('signature')));
+
+    if ($normalizedName !== '' && $normalizedSignature !== '' && $normalizedName !== $normalizedSignature) {
+        addError($errors, $fieldErrors, 'signature', 'Your typed signature must match your full name.');
     }
 
     $photo = $_FILES['member_photo'] ?? null;
     $photoData = null;
 
     if (!$photo || (int) $photo['error'] !== UPLOAD_ERR_OK) {
-        $errors[] = 'Upload a clear photograph of the applicant.';
+        addError($errors, $fieldErrors, 'member_photo', 'Upload a clear photograph of the applicant.');
     } elseif ((int) $photo['size'] > MAX_PHOTO_SIZE) {
-        $errors[] = 'The applicant photograph must be 5 MB or smaller.';
+        addError($errors, $fieldErrors, 'member_photo', 'The applicant photograph must be 5 MB or smaller.');
+    } elseif (!is_uploaded_file($photo['tmp_name'])) {
+        addError($errors, $fieldErrors, 'member_photo', 'The applicant photograph upload is invalid.');
     } else {
         $mime = (new finfo(FILEINFO_MIME_TYPE))->file($photo['tmp_name']);
         $allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
 
-        if (!in_array($mime, $allowedTypes, true)) {
-            $errors[] = 'The applicant photograph must be a JPG, PNG or WebP image.';
+        if (!in_array($mime, $allowedTypes, true) || getimagesize($photo['tmp_name']) === false) {
+            addError($errors, $fieldErrors, 'member_photo', 'The applicant photograph must be a valid JPG, PNG or WebP image.');
         } else {
             $photoData = [
                 'tmp_name' => $photo['tmp_name'],
@@ -245,7 +357,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (mail($recipients, $encodedSubject, $message, implode("\r\n", $headers))) {
             $_SESSION['registration_token'] = bin2hex(random_bytes(32));
-            header('Location: register.php?submitted=1');
+            header('Location: /register?submitted=1');
             exit;
         }
 
@@ -459,6 +571,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             box-shadow: 0 0 0 4px rgba(37, 168, 238, .12);
         }
 
+        input.is-invalid, select.is-invalid {
+            border-color: var(--danger);
+            background: #fffafa;
+            box-shadow: 0 0 0 3px rgba(180, 35, 24, .08);
+        }
+
+        .field-error {
+            margin: .4rem 0 0;
+            color: var(--danger);
+            font-size: .78rem;
+            font-weight: 700;
+            line-height: 1.4;
+        }
+
+        .choice-grid.is-invalid,
+        .declarations.is-invalid {
+            padding: .6rem;
+            border: 1px solid #fda29b;
+            border-radius: 10px;
+            background: #fffafa;
+        }
+
         input[type="file"] {
             padding: .6rem;
             background: #f8fafc;
@@ -605,7 +739,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </div>
         <?php endif; ?>
 
-        <form method="post" enctype="multipart/form-data" action="register.php">
+        <form id="registration-form" method="post" enctype="multipart/form-data" action="/register">
             <input type="hidden" name="_token" value="<?= escape($_SESSION['registration_token']) ?>">
             <div class="honeypot" aria-hidden="true">
                 <label for="website">Website</label>
@@ -617,31 +751,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="grid">
                     <div class="span-2">
                         <label for="full_name">Full name <span class="required">*</span></label>
-                        <input id="full_name" name="full_name" value="<?= field('full_name') ?>" autocomplete="name" required>
+                        <input id="full_name" name="full_name" value="<?= field('full_name') ?>" autocomplete="name" maxlength="120" required>
                     </div>
                     <div>
                         <label for="preferred_name">Preferred name</label>
-                        <input id="preferred_name" name="preferred_name" value="<?= field('preferred_name') ?>">
+                        <input id="preferred_name" name="preferred_name" value="<?= field('preferred_name') ?>" maxlength="80">
                     </div>
                     <div>
                         <label for="email">Email address <span class="required">*</span></label>
-                        <input id="email" name="email" type="email" value="<?= field('email') ?>" autocomplete="email" required>
+                        <input id="email" name="email" type="email" value="<?= field('email') ?>" autocomplete="email" maxlength="190" required>
                     </div>
                     <div>
                         <label for="mobile_number">Mobile number <span class="required">*</span></label>
-                        <input id="mobile_number" name="mobile_number" type="tel" value="<?= field('mobile_number') ?>" autocomplete="tel" required>
+                        <input id="mobile_number" name="mobile_number" type="tel" value="<?= field('mobile_number') ?>" autocomplete="tel" inputmode="tel" maxlength="30" pattern="\+?[0-9\s().-]{7,30}" required>
                     </div>
                     <div>
                         <label for="whatsapp">WhatsApp number</label>
-                        <input id="whatsapp" name="whatsapp" type="tel" value="<?= field('whatsapp') ?>">
+                        <input id="whatsapp" name="whatsapp" type="tel" value="<?= field('whatsapp') ?>" inputmode="tel" maxlength="30" pattern="\+?[0-9\s().-]{7,30}">
                     </div>
                     <div>
                         <label for="linkedin">LinkedIn profile</label>
-                        <input id="linkedin" name="linkedin" value="<?= field('linkedin') ?>" placeholder="https://linkedin.com/in/...">
+                        <input id="linkedin" name="linkedin" type="url" value="<?= field('linkedin') ?>" maxlength="255" placeholder="https://linkedin.com/in/...">
                     </div>
                     <div>
                         <label for="instagram">Instagram / Snapchat</label>
-                        <input id="instagram" name="instagram" value="<?= field('instagram') ?>" placeholder="@username">
+                        <input id="instagram" name="instagram" value="<?= field('instagram') ?>" maxlength="80" placeholder="@username">
                     </div>
                     <div class="span-2">
                         <label for="member_photo">Clear applicant photograph <span class="required">*</span></label>
@@ -656,19 +790,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="grid">
                     <div class="span-2">
                         <label for="occupation">Occupation / Industry <span class="required">*</span></label>
-                        <input id="occupation" name="occupation" value="<?= field('occupation') ?>" required>
+                        <input id="occupation" name="occupation" value="<?= field('occupation') ?>" maxlength="120" required>
                     </div>
                     <div>
                         <label for="company_name">Company / Business name</label>
-                        <input id="company_name" name="company_name" value="<?= field('company_name') ?>">
+                        <input id="company_name" name="company_name" value="<?= field('company_name') ?>" maxlength="120">
                     </div>
                     <div>
                         <label for="position">Position / Role</label>
-                        <input id="position" name="position" value="<?= field('position') ?>">
+                        <input id="position" name="position" value="<?= field('position') ?>" maxlength="120">
                     </div>
                     <div class="span-2">
                         <label for="date_of_birth">Date of birth <span class="required">*</span></label>
-                        <input id="date_of_birth" name="date_of_birth" type="date" value="<?= field('date_of_birth') ?>" required>
+                        <input id="date_of_birth" name="date_of_birth" type="date" value="<?= field('date_of_birth') ?>" max="<?= date('Y-m-d', strtotime('-1 day')) ?>" required>
                     </div>
                 </div>
             </fieldset>
@@ -705,15 +839,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="grid">
                     <div>
                         <label for="emergency_name">Name <span class="required">*</span></label>
-                        <input id="emergency_name" name="emergency_name" value="<?= field('emergency_name') ?>" required>
+                        <input id="emergency_name" name="emergency_name" value="<?= field('emergency_name') ?>" maxlength="120" required>
                     </div>
                     <div>
                         <label for="emergency_relationship">Relationship <span class="required">*</span></label>
-                        <input id="emergency_relationship" name="emergency_relationship" value="<?= field('emergency_relationship') ?>" required>
+                        <input id="emergency_relationship" name="emergency_relationship" value="<?= field('emergency_relationship') ?>" maxlength="80" required>
                     </div>
                     <div class="span-2">
                         <label for="emergency_phone">Phone <span class="required">*</span></label>
-                        <input id="emergency_phone" name="emergency_phone" type="tel" value="<?= field('emergency_phone') ?>" required>
+                        <input id="emergency_phone" name="emergency_phone" type="tel" value="<?= field('emergency_phone') ?>" inputmode="tel" maxlength="30" pattern="\+?[0-9\s().-]{7,30}" required>
                     </div>
                 </div>
             </fieldset>
@@ -735,19 +869,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="grid" style="margin-top:1.5rem;">
                     <div class="span-2">
                         <label for="inviting_member">Inviting member <span class="hint">(for standard admission)</span></label>
-                        <input id="inviting_member" name="inviting_member" value="<?= field('inviting_member') ?>">
+                        <input id="inviting_member" name="inviting_member" value="<?= field('inviting_member') ?>" maxlength="120">
                     </div>
                     <div>
                         <label for="supporting_member_1">Supporting member 1</label>
-                        <input id="supporting_member_1" name="supporting_member_1" value="<?= field('supporting_member_1') ?>">
+                        <input id="supporting_member_1" name="supporting_member_1" value="<?= field('supporting_member_1') ?>" maxlength="120">
                     </div>
                     <div>
                         <label for="supporting_member_2">Supporting member 2</label>
-                        <input id="supporting_member_2" name="supporting_member_2" value="<?= field('supporting_member_2') ?>">
+                        <input id="supporting_member_2" name="supporting_member_2" value="<?= field('supporting_member_2') ?>" maxlength="120">
                     </div>
                     <div class="span-2">
                         <label for="supporting_member_3">Supporting member 3</label>
-                        <input id="supporting_member_3" name="supporting_member_3" value="<?= field('supporting_member_3') ?>">
+                        <input id="supporting_member_3" name="supporting_member_3" value="<?= field('supporting_member_3') ?>" maxlength="120">
                     </div>
                 </div>
             </fieldset>
@@ -761,11 +895,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="grid" style="margin-top:1.5rem;">
                     <div>
                         <label for="signature">Type your full name as signature <span class="required">*</span></label>
-                        <input id="signature" name="signature" value="<?= field('signature') ?>" required>
+                        <input id="signature" name="signature" value="<?= field('signature') ?>" maxlength="120" required>
                     </div>
                     <div>
                         <label for="declaration_date">Date <span class="required">*</span></label>
-                        <input id="declaration_date" name="declaration_date" type="date" value="<?= field('declaration_date') ?>" required>
+                        <input id="declaration_date" name="declaration_date" type="date" value="<?= field('declaration_date') ?>" max="<?= date('Y-m-d') ?>" required>
                     </div>
                 </div>
             </fieldset>
@@ -774,5 +908,117 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <p class="privacy">Your details and photograph are used only to process your Lagos Padel Club membership application.</p>
         </form>
     </main>
+    <script>
+        (() => {
+            const form = document.getElementById('registration-form');
+            const serverErrors = <?= json_encode($fieldErrors, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
+            const sponsorshipFields = [
+                'inviting_member',
+                'supporting_member_1',
+                'supporting_member_2',
+                'supporting_member_3'
+            ];
+
+            const controlsFor = (name) => Array.from(form.querySelectorAll(
+                `[name="${CSS.escape(name)}"], [name="${CSS.escape(name)}[]"]`
+            ));
+
+            const errorHost = (control) => {
+                if (control.type === 'radio' || control.type === 'checkbox') {
+                    return control.closest('.choice-grid, .declarations') || control.closest('fieldset');
+                }
+
+                return control.parentElement;
+            };
+
+            const clearError = (name) => {
+                controlsFor(name).forEach((control) => {
+                    control.classList.remove('is-invalid');
+                    control.removeAttribute('aria-invalid');
+                    const group = control.closest('.choice-grid, .declarations');
+                    if (group) group.classList.remove('is-invalid');
+                });
+
+                form.querySelectorAll(`[data-error-for="${CSS.escape(name)}"]`).forEach((error) => error.remove());
+            };
+
+            const showError = (name, message) => {
+                const controls = controlsFor(name);
+                if (!controls.length) return;
+
+                clearError(name);
+                controls.forEach((control) => {
+                    control.classList.add('is-invalid');
+                    control.setAttribute('aria-invalid', 'true');
+                    const group = control.closest('.choice-grid, .declarations');
+                    if (group) group.classList.add('is-invalid');
+                });
+
+                const error = document.createElement('p');
+                error.className = 'field-error';
+                error.dataset.errorFor = name;
+                error.textContent = message;
+                errorHost(controls[0]).appendChild(error);
+            };
+
+            const updateSponsorshipRequirements = () => {
+                const standard = form.querySelector('[name="admission_pathway"]:checked')?.value === 'standard_admission';
+                sponsorshipFields.forEach((name) => {
+                    const control = form.elements[name];
+                    control.required = standard;
+                    control.setAttribute('aria-required', standard ? 'true' : 'false');
+                    if (!standard) clearError(name);
+                });
+            };
+
+            Object.entries(serverErrors).forEach(([name, message]) => showError(name, message));
+            updateSponsorshipRequirements();
+
+            form.addEventListener('change', (event) => {
+                if (event.target.name === 'admission_pathway') updateSponsorshipRequirements();
+                if (event.target.name) clearError(event.target.name.replace('[]', ''));
+            });
+
+            form.addEventListener('input', (event) => {
+                if (event.target.name) clearError(event.target.name.replace('[]', ''));
+            });
+
+            form.addEventListener('submit', (event) => {
+                updateSponsorshipRequirements();
+                let firstInvalid = null;
+
+                const photo = form.elements.member_photo;
+                if (photo.files[0] && photo.files[0].size > 5 * 1024 * 1024) {
+                    photo.setCustomValidity('The applicant photograph must be 5 MB or smaller.');
+                } else {
+                    photo.setCustomValidity('');
+                }
+
+                const fullName = form.elements.full_name.value.trim().replace(/\s+/g, ' ').toLowerCase();
+                const signature = form.elements.signature.value.trim().replace(/\s+/g, ' ').toLowerCase();
+                form.elements.signature.setCustomValidity(
+                    fullName && signature && fullName !== signature
+                        ? 'Your typed signature must match your full name.'
+                        : ''
+                );
+
+                Array.from(form.elements).forEach((control) => {
+                    if (!control.name || control.disabled || control.type === 'hidden') return;
+
+                    if (!control.checkValidity()) {
+                        const name = control.name.replace('[]', '');
+                        showError(name, control.validationMessage);
+                        firstInvalid ||= control;
+                    }
+                });
+
+                if (firstInvalid) {
+                    event.preventDefault();
+                    firstInvalid.focus({preventScroll: true});
+                    firstInvalid.scrollIntoView({behavior: 'smooth', block: 'center'});
+                }
+            });
+        })();
+    </script>
 </body>
 </html>
