@@ -5,6 +5,11 @@ session_start();
 
 const ADMIN_EMAIL = 'admin@lagospadelclub.com';
 const MAX_PHOTO_SIZE = 5 * 1024 * 1024;
+const ZEPTOMAIL_ENDPOINT = 'https://api.zeptomail.com/v1.1/email';
+const ZEPTOMAIL_FROM_EMAIL = 'noreply@lagospadelclub.com';
+const ZEPTOMAIL_FROM_NAME = 'Lagos Padel Club';
+
+define('ZEPTOMAIL_AUTH_HEADER', getenv('ZEPTOMAIL_TOKEN') ?: '');
 
 function escape(string $value): string
 {
@@ -64,7 +69,7 @@ function addError(array &$errors, array &$fieldErrors, string $field, string $me
     $fieldErrors[$field] = $message;
 }
 
-function buildEmail(array $details, array $photo, string $boundary): string
+function detailsRows(array $details): string
 {
     $rows = '';
 
@@ -85,34 +90,205 @@ function buildEmail(array $details, array $photo, string $boundary): string
         }
     }
 
+    return $rows;
+}
+
+function emailShell(string $eyebrow, string $title, string $body, string $rows = ''): string
+{
     $html = '<!doctype html><html><body style="margin:0;background:#eef2f6;font-family:Arial,sans-serif;color:#101828;">'
         . '<div style="max-width:680px;margin:0 auto;padding:30px 16px;">'
         . '<div style="background:#06163a;padding:28px;text-align:center;border-radius:18px 18px 0 0;">'
         . '<img src="https://lagospadelclub.com/logo.png" width="130" alt="Lagos Padel Club" style="display:block;margin:0 auto 14px;">'
-        . '<div style="color:#ffd400;font-size:13px;font-weight:800;letter-spacing:2px;text-transform:uppercase;">Elite Membership</div>'
-        . '<h1 style="margin:8px 0 0;color:#fff;font-size:28px;">Registration received</h1>'
+        . '<div style="color:#ffd400;font-size:13px;font-weight:800;letter-spacing:2px;text-transform:uppercase;">' . escape($eyebrow) . '</div>'
+        . '<h1 style="margin:8px 0 0;color:#fff;font-size:28px;">' . escape($title) . '</h1>'
         . '</div>'
         . '<div style="background:#fff;padding:24px 18px;border-radius:0 0 18px 18px;">'
-        . '<p style="margin:0 18px 14px;line-height:1.7;color:#475467;">Thank you for registering with Lagos Padel Club. A copy of your submitted information is below. Your photograph is attached to this email.</p>'
-        . '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
-        . $rows
-        . '</table>'
-        . '<p style="margin:24px 18px 4px;color:#667085;font-size:13px;line-height:1.6;">The club team will review this application and contact the applicant with the next steps.</p>'
+        . '<p style="margin:0 18px 14px;line-height:1.7;color:#475467;">' . $body . '</p>';
+
+    if ($rows !== '') {
+        $html .= '<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
+            . $rows
+            . '</table>';
+    }
+
+    return $html
+        . '<p style="margin:24px 18px 4px;color:#667085;font-size:13px;line-height:1.6;">Lagos Padel Club</p>'
         . '</div></div></body></html>';
+}
 
-    $attachment = chunk_split(base64_encode((string) file_get_contents($photo['tmp_name'])));
-    $filename = preg_replace('/[^A-Za-z0-9._-]/', '-', $photo['name']) ?: 'member-photo.jpg';
+function pdfText(string $value): string
+{
+    $converted = @iconv('UTF-8', 'Windows-1252//TRANSLIT', $value);
 
-    return "--{$boundary}\r\n"
-        . "Content-Type: text/html; charset=UTF-8\r\n"
-        . "Content-Transfer-Encoding: 8bit\r\n\r\n"
-        . $html . "\r\n"
-        . "--{$boundary}\r\n"
-        . "Content-Type: {$photo['mime']}; name=\"{$filename}\"\r\n"
-        . "Content-Transfer-Encoding: base64\r\n"
-        . "Content-Disposition: attachment; filename=\"{$filename}\"\r\n\r\n"
-        . $attachment . "\r\n"
-        . "--{$boundary}--";
+    if ($converted === false) {
+        $converted = preg_replace('/[^\x20-\x7E]/', '?', $value) ?? $value;
+    }
+
+    return str_replace(['\\', '(', ')'], ['\\\\', '\\(', '\\)'], $converted);
+}
+
+function pdfCommand(float $x, float $y, int $size, string $text): string
+{
+    return sprintf("BT /F1 %d Tf %.2F %.2F Td (%s) Tj ET\n", $size, $x, $y, pdfText($text));
+}
+
+function buildRegistrationPdf(array $details): string
+{
+    $pages = [];
+    $content = '';
+    $y = 780.0;
+
+    $addPage = static function () use (&$pages, &$content, &$y): void {
+        if ($content !== '') {
+            $pages[] = $content;
+        }
+
+        $content = pdfCommand(50, 800, 18, 'Lagos Padel Club')
+            . pdfCommand(50, 778, 13, 'Elite Membership Registration')
+            . pdfCommand(50, 760, 9, 'Generated on ' . date('j M Y, g:ia'));
+        $y = 730.0;
+    };
+
+    $addPage();
+
+    foreach ($details as $section => $items) {
+        if ($y < 90) {
+            $addPage();
+        }
+
+        $content .= pdfCommand(50, $y, 13, strtoupper((string) $section));
+        $y -= 18;
+
+        foreach ($items as $label => $value) {
+            if ($y < 60) {
+                $addPage();
+            }
+
+            $text = $label . ': ' . ($value !== '' ? $value : 'Not provided');
+            $wrapped = wordwrap($text, 88, "\n", true);
+
+            foreach (explode("\n", $wrapped) as $line) {
+                if ($y < 60) {
+                    $addPage();
+                }
+
+                $content .= pdfCommand(62, $y, 10, $line);
+                $y -= 14;
+            }
+        }
+
+        $y -= 10;
+    }
+
+    $pages[] = $content;
+
+    $objects = [
+        '<< /Type /Catalog /Pages 2 0 R >>',
+        '',
+        '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ];
+    $pageObjectNumbers = [];
+
+    foreach ($pages as $pageContent) {
+        $pageNumber = count($objects) + 1;
+        $contentNumber = $pageNumber + 1;
+        $pageObjectNumbers[] = $pageNumber;
+        $objects[] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents {$contentNumber} 0 R >>";
+        $objects[] = "<< /Length " . strlen($pageContent) . " >>\nstream\n{$pageContent}endstream";
+    }
+
+    $objects[1] = '<< /Type /Pages /Kids [' . implode(' ', array_map(static fn (int $number): string => "{$number} 0 R", $pageObjectNumbers)) . '] /Count ' . count($pageObjectNumbers) . ' >>';
+
+    $pdf = "%PDF-1.4\n";
+    $offsets = [0];
+
+    foreach ($objects as $index => $object) {
+        $offsets[] = strlen($pdf);
+        $number = $index + 1;
+        $pdf .= "{$number} 0 obj\n{$object}\nendobj\n";
+    }
+
+    $xref = strlen($pdf);
+    $pdf .= "xref\n0 " . (count($objects) + 1) . "\n0000000000 65535 f \n";
+
+    for ($i = 1; $i <= count($objects); $i++) {
+        $pdf .= sprintf("%010d 00000 n \n", $offsets[$i]);
+    }
+
+    return $pdf
+        . "trailer\n<< /Size " . (count($objects) + 1) . " /Root 1 0 R >>\n"
+        . "startxref\n{$xref}\n%%EOF";
+}
+
+function sendZeptoMail(array $payload, ?string &$error = null): bool
+{
+    if (ZEPTOMAIL_AUTH_HEADER === '') {
+        $error = 'ZEPTOMAIL_TOKEN is not configured on the server.';
+        return false;
+    }
+
+    $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+    if ($encoded === false) {
+        $error = 'Could not prepare the email payload.';
+        return false;
+    }
+
+    $ch = curl_init(ZEPTOMAIL_ENDPOINT);
+
+    if ($ch === false) {
+        $error = 'Could not initialize the email request.';
+        return false;
+    }
+
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER => [
+            'Accept: application/json',
+            'Content-Type: application/json',
+            'Authorization: ' . ZEPTOMAIL_AUTH_HEADER,
+        ],
+        CURLOPT_POSTFIELDS => $encoded,
+        CURLOPT_TIMEOUT => 20,
+    ]);
+
+    $response = curl_exec($ch);
+    $status = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+
+    if ($response === false || $status < 200 || $status >= 300) {
+        $error = curl_error($ch) ?: 'ZeptoMail returned HTTP ' . $status . ': ' . (string) $response;
+        curl_close($ch);
+        return false;
+    }
+
+    curl_close($ch);
+    return true;
+}
+
+function zeptoAddress(string $email, string $name = ''): array
+{
+    return [
+        'email_address' => [
+            'address' => $email,
+            'name' => $name !== '' ? $name : $email,
+        ],
+    ];
+}
+
+function zeptoBasePayload(string $toEmail, string $toName, string $subject, string $html): array
+{
+    return [
+        'from' => [
+            'address' => ZEPTOMAIL_FROM_EMAIL,
+            'name' => ZEPTOMAIL_FROM_NAME,
+        ],
+        'to' => [
+            zeptoAddress($toEmail, $toName),
+        ],
+        'subject' => $subject,
+        'htmlbody' => $html,
+    ];
 }
 
 if (empty($_SESSION['registration_token'])) {
@@ -123,7 +299,7 @@ $errors = [];
 $fieldErrors = [];
 $success = isset($_GET['submitted']);
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     $token = (string) ($_POST['_token'] ?? '');
 
     if (!hash_equals((string) $_SESSION['registration_token'], $token)) {
@@ -314,6 +490,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'LinkedIn' => rawField('linkedin'),
                 'Instagram / Snapchat' => rawField('instagram'),
                 'Email address' => rawField('email'),
+                'Photo filename' => (string) $photoData['name'],
             ],
             'Background details' => [
                 'Occupation / Industry' => rawField('occupation'),
@@ -342,26 +519,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ],
         ];
 
-        $boundary = '=_LPC_' . bin2hex(random_bytes(16));
-        $subject = 'Lagos Padel Club membership registration - ' . rawField('full_name');
-        $encodedSubject = '=?UTF-8?B?' . base64_encode($subject) . '?=';
-        $headers = [
-            'MIME-Version: 1.0',
-            "Content-Type: multipart/mixed; boundary=\"{$boundary}\"",
-            'From: Lagos Padel Club <' . ADMIN_EMAIL . '>',
-            'Reply-To: ' . rawField('email'),
-            'X-Mailer: PHP/' . PHP_VERSION,
-        ];
-        $recipients = rawField('email') . ', ' . ADMIN_EMAIL;
-        $message = buildEmail($details, $photoData, $boundary);
+        $safeName = preg_replace('/[^A-Za-z0-9-]+/', '-', rawField('full_name')) ?: 'member';
+        $pdfName = 'lagos-padel-registration-' . trim($safeName, '-') . '.pdf';
+        $pdf = buildRegistrationPdf($details);
 
-        if (mail($recipients, $encodedSubject, $message, implode("\r\n", $headers))) {
+        $adminSubject = 'New Lagos Padel Club registration - ' . rawField('full_name');
+        $adminHtml = emailShell(
+            'New membership application',
+            'Registration received',
+            'A new Lagos Padel Club membership application has been submitted. The completed registration summary is attached as a PDF.',
+            detailsRows($details)
+        );
+        $adminPayload = zeptoBasePayload(ADMIN_EMAIL, 'Lagos Padel Club Admin', $adminSubject, $adminHtml);
+        $adminPayload['attachments'] = [
+            [
+                'name' => $pdfName,
+                'content' => base64_encode($pdf),
+                'mime_type' => 'application/pdf',
+            ],
+        ];
+
+        $welcomeName = rawField('preferred_name') !== '' ? rawField('preferred_name') : rawField('full_name');
+        $welcomeSubject = 'Welcome to Lagos Padel Club';
+        $welcomeHtml = emailShell(
+            'Elite membership',
+            'Welcome to Lagos Padel Club',
+            'Hello ' . escape($welcomeName) . ',<br><br>'
+                . 'Thank you for submitting your Lagos Padel Club membership registration. We have received your details and our membership team will review your application shortly.<br><br>'
+                . 'We are excited to welcome you into a community built around padel, competition, lifestyle and connection. Please keep an eye on your email for the next steps.',
+        );
+        $welcomePayload = zeptoBasePayload((string) $email, rawField('full_name'), $welcomeSubject, $welcomeHtml);
+
+        $mailError = null;
+
+        if (sendZeptoMail($adminPayload, $mailError) && sendZeptoMail($welcomePayload, $mailError)) {
             $_SESSION['registration_token'] = bin2hex(random_bytes(32));
             header('Location: /register?submitted=1');
             exit;
         }
 
         $errors[] = 'We could not send your registration right now. Please try again shortly.';
+        error_log('Lagos Padel Club registration email failed: ' . (string) $mailError);
     }
 }
 ?>
