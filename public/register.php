@@ -1,4 +1,5 @@
 <?php
+
 declare(strict_types=1);
 
 session_start();
@@ -9,12 +10,13 @@ const ZEPTOMAIL_ENDPOINT = 'https://api.zeptomail.com/v1.1/email';
 const ZEPTOMAIL_FROM_EMAIL = 'noreply@lagospadelclub.com';
 const ZEPTOMAIL_FROM_NAME = 'Lagos Padel Club';
 
-define('ZEPTOMAIL_AUTH_HEADER', getenv('ZEPTOMAIL_TOKEN') ?: '');
+define('ZEPTOMAIL_AUTH_HEADER',  '');
 
 function escape(string $value): string
 {
     return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
 }
+
 
 function field(string $name): string
 {
@@ -61,6 +63,17 @@ function validPhone(string $value): bool
     return preg_match('/^\+?[0-9\s().-]+$/', $value) === 1
         && strlen((string) $digits) >= 7
         && strlen((string) $digits) <= 15;
+}
+
+function validSignatureData(string $value): bool
+{
+    if (!preg_match('/^data:image\/png;base64,[A-Za-z0-9+\/=]+$/', $value)) {
+        return false;
+    }
+
+    $decoded = base64_decode(substr($value, strlen('data:image/png;base64,')), true);
+
+    return $decoded !== false && strlen($decoded) > 500 && strlen($decoded) < 800000;
 }
 
 function addError(array &$errors, array &$fieldErrors, string $field, string $message): void
@@ -197,7 +210,7 @@ function buildRegistrationPdf(array $details): string
         $objects[] = "<< /Length " . strlen($pageContent) . " >>\nstream\n{$pageContent}endstream";
     }
 
-    $objects[1] = '<< /Type /Pages /Kids [' . implode(' ', array_map(static fn (int $number): string => "{$number} 0 R", $pageObjectNumbers)) . '] /Count ' . count($pageObjectNumbers) . ' >>';
+    $objects[1] = '<< /Type /Pages /Kids [' . implode(' ', array_map(static fn(int $number): string => "{$number} 0 R", $pageObjectNumbers)) . '] /Count ' . count($pageObjectNumbers) . ' >>';
 
     $pdf = "%PDF-1.4\n";
     $offsets = [0];
@@ -312,9 +325,15 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 
     $required = [
         'full_name' => 'Full name',
+        'preferred_name' => 'Preferred name',
         'mobile_number' => 'Mobile number',
+        'whatsapp' => 'WhatsApp number',
+        'linkedin' => 'LinkedIn profile',
+        'instagram' => 'Instagram / Snapchat',
         'email' => 'Email address',
         'occupation' => 'Occupation or industry',
+        'company_name' => 'Company or business name',
+        'position' => 'Position or role',
         'date_of_birth' => 'Date of birth',
         'playing_level' => 'Playing level',
         'emergency_name' => 'Emergency contact name',
@@ -322,7 +341,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         'emergency_phone' => 'Emergency contact phone',
         'media_consent' => 'Media consent',
         'admission_pathway' => 'Admission pathway',
-        'signature' => 'Signature',
+        'signature_data' => 'Signature',
         'declaration_date' => 'Declaration date',
     ];
 
@@ -338,36 +357,38 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         addError($errors, $fieldErrors, 'email', 'Enter a valid email address.');
     }
 
-    foreach ([
-        'full_name' => 120,
-        'preferred_name' => 80,
-        'email' => 190,
-        'mobile_number' => 30,
-        'whatsapp' => 30,
-        'linkedin' => 255,
-        'instagram' => 80,
-        'occupation' => 120,
-        'company_name' => 120,
-        'position' => 120,
-        'emergency_name' => 120,
-        'emergency_relationship' => 80,
-        'emergency_phone' => 30,
-        'inviting_member' => 120,
-        'supporting_member_1' => 120,
-        'supporting_member_2' => 120,
-        'supporting_member_3' => 120,
-        'signature' => 120,
-    ] as $name => $maximum) {
+    foreach (
+        [
+            'full_name' => 120,
+            'preferred_name' => 80,
+            'email' => 190,
+            'mobile_number' => 30,
+            'whatsapp' => 30,
+            'linkedin' => 255,
+            'instagram' => 80,
+            'occupation' => 120,
+            'company_name' => 120,
+            'position' => 120,
+            'emergency_name' => 120,
+            'emergency_relationship' => 80,
+            'emergency_phone' => 30,
+            'inviting_member' => 120,
+            'supporting_member_1' => 120,
+            'supporting_member_2' => 120,
+            'supporting_member_3' => 120,
+        ] as $name => $maximum
+    ) {
         if (mb_strlen(rawField($name)) > $maximum) {
             addError($errors, $fieldErrors, $name, formatLabel($name) . " must not exceed {$maximum} characters.");
         }
     }
 
-    foreach ([
-        'full_name' => 'Full name',
-        'emergency_name' => 'Emergency contact name',
-        'signature' => 'Signature',
-    ] as $name => $label) {
+    foreach (
+        [
+            'full_name' => 'Full name',
+            'emergency_name' => 'Emergency contact name',
+        ] as $name => $label
+    ) {
         $value = rawField($name);
 
         if ($value !== '' && preg_match("/^[\\p{L}\\p{M}][\\p{L}\\p{M} .'-]{1,119}$/u", $value) !== 1) {
@@ -375,11 +396,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         }
     }
 
-    foreach ([
-        'mobile_number' => 'Mobile number',
-        'whatsapp' => 'WhatsApp number',
-        'emergency_phone' => 'Emergency contact phone',
-    ] as $name => $label) {
+    foreach (
+        [
+            'mobile_number' => 'Mobile number',
+            'whatsapp' => 'WhatsApp number',
+            'emergency_phone' => 'Emergency contact phone',
+        ] as $name => $label
+    ) {
         $value = rawField($name);
 
         if ($value !== '' && !validPhone($value)) {
@@ -421,17 +444,26 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         addError($errors, $fieldErrors, 'admission_pathway', 'Choose a valid admission pathway.');
     }
 
-    if (rawField('admission_pathway') === 'standard_admission') {
-        foreach ([
+    foreach (
+        [
             'inviting_member' => 'Inviting member',
             'supporting_member_1' => 'Supporting member 1',
             'supporting_member_2' => 'Supporting member 2',
             'supporting_member_3' => 'Supporting member 3',
-        ] as $name => $label) {
-            if (rawField($name) === '') {
-                addError($errors, $fieldErrors, $name, "{$label} is required for standard admission.");
-            }
+        ] as $name => $label
+    ) {
+        if (rawField($name) === '') {
+            addError($errors, $fieldErrors, $name, "{$label} is required.");
         }
+    }
+
+    $engagement = array_values(array_intersect(
+        (array) ($_POST['club_engagement'] ?? []),
+        ['social_play', 'competitive_matches', 'tournaments', 'club_events']
+    ));
+
+    if ($engagement === []) {
+        addError($errors, $fieldErrors, 'club_engagement', 'Select at least one club engagement option.');
     }
 
     foreach (['fitness_declaration', 'sport_acknowledgement', 'liability_release', 'club_declaration'] as $declaration) {
@@ -441,11 +473,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         }
     }
 
-    $normalizedName = preg_replace('/\s+/', ' ', mb_strtolower(rawField('full_name')));
-    $normalizedSignature = preg_replace('/\s+/', ' ', mb_strtolower(rawField('signature')));
-
-    if ($normalizedName !== '' && $normalizedSignature !== '' && $normalizedName !== $normalizedSignature) {
-        addError($errors, $fieldErrors, 'signature', 'Your typed signature must match your full name.');
+    if (!validSignatureData(rawField('signature_data'))) {
+        addError($errors, $fieldErrors, 'signature_data', 'Please sign inside the signature box.');
     }
 
     $photo = $_FILES['member_photo'] ?? null;
@@ -474,11 +503,8 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 
     if (!$errors && $email && $photoData) {
         $engagement = array_map(
-            static fn (string $item): string => formatLabel($item),
-            array_values(array_intersect(
-                (array) ($_POST['club_engagement'] ?? []),
-                ['social_play', 'competitive_matches', 'tournaments', 'club_events']
-            ))
+            static fn(string $item): string => formatLabel($item),
+            $engagement
         );
 
         $details = [
@@ -514,7 +540,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 'Supporting member 1' => rawField('supporting_member_1'),
                 'Supporting member 2' => rawField('supporting_member_2'),
                 'Supporting member 3' => rawField('supporting_member_3'),
-                'Signed by' => rawField('signature'),
+                'Signature' => 'Submitted electronically',
                 'Declaration date' => rawField('declaration_date'),
             ],
         ];
@@ -536,6 +562,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 'name' => $pdfName,
                 'content' => base64_encode($pdf),
                 'mime_type' => 'application/pdf',
+            ],
+            [
+                'name' => 'signature-' . trim($safeName, '-') . '.png',
+                'content' => substr(rawField('signature_data'), strlen('data:image/png;base64,')),
+                'mime_type' => 'image/png',
             ],
         ];
 
@@ -565,6 +596,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
 ?>
 <!doctype html>
 <html lang="en">
+
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -588,7 +620,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             --success: #067647;
         }
 
-        * { box-sizing: border-box; }
+        * {
+            box-sizing: border-box;
+        }
 
         body {
             min-width: 320px;
@@ -600,7 +634,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 var(--surface);
         }
 
-        a { color: inherit; }
+        a {
+            color: inherit;
+        }
 
         .topbar {
             display: flex;
@@ -709,8 +745,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             border-bottom: 1px solid var(--line);
         }
 
-        fieldset:first-of-type { padding-top: 0; }
-        fieldset:last-of-type { border-bottom: 0; }
+        fieldset:first-of-type {
+            padding-top: 0;
+        }
+
+        fieldset:last-of-type {
+            border-bottom: 0;
+        }
 
         legend {
             display: block;
@@ -739,9 +780,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             gap: 1rem;
         }
 
-        .span-2 { grid-column: 1 / -1; }
+        .span-2 {
+            grid-column: 1 / -1;
+        }
 
-        label, .label {
+        label,
+        .label {
             display: block;
             margin-bottom: .45rem;
             color: #344054;
@@ -749,9 +793,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             font-weight: 700;
         }
 
-        .required { color: #d92d20; }
+        .required {
+            color: #d92d20;
+        }
 
-        input, select {
+        input,
+        select {
             width: 100%;
             min-height: 50px;
             padding: .78rem .9rem;
@@ -764,12 +811,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             transition: border-color .2s, box-shadow .2s;
         }
 
-        input:focus, select:focus {
+        input:focus,
+        select:focus {
             border-color: var(--blue);
             box-shadow: 0 0 0 4px rgba(37, 168, 238, .12);
         }
 
-        input.is-invalid, select.is-invalid {
+        input.is-invalid,
+        select.is-invalid {
             border-color: var(--danger);
             background: #fffafa;
             box-shadow: 0 0 0 3px rgba(180, 35, 24, .08);
@@ -789,6 +838,50 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             border: 1px solid #fda29b;
             border-radius: 10px;
             background: #fffafa;
+        }
+
+        .signature-pad {
+            padding: .75rem;
+            border: 1px solid #cbd3df;
+            border-radius: 12px;
+            background: #fff;
+            transition: border-color .2s, box-shadow .2s;
+        }
+
+        .signature-pad.is-invalid {
+            border-color: var(--danger);
+            background: #fffafa;
+            box-shadow: 0 0 0 3px rgba(180, 35, 24, .08);
+        }
+
+        .signature-canvas {
+            display: block;
+            width: 100%;
+            height: 190px;
+            border-radius: 9px;
+            background:
+                linear-gradient(transparent calc(100% - 42px), rgba(6, 22, 58, .15) calc(100% - 42px), rgba(6, 22, 58, .15) calc(100% - 40px), transparent calc(100% - 40px)),
+                #fbfcfe;
+            touch-action: none;
+            cursor: crosshair;
+        }
+
+        .signature-actions {
+            display: flex;
+            margin-top: .75rem;
+            align-items: center;
+            justify-content: space-between;
+            gap: .8rem;
+        }
+
+        .signature-clear {
+            border: 0;
+            color: var(--navy);
+            background: transparent;
+            font: inherit;
+            font-weight: 800;
+            cursor: pointer;
+            text-decoration: underline;
         }
 
         input[type="file"] {
@@ -894,15 +987,37 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         }
 
         @media (max-width: 680px) {
-            .grid, .choice-grid { grid-template-columns: 1fr; }
-            .span-2 { grid-column: auto; }
-            .topbar { padding: .75rem 1rem; }
-            .brand { letter-spacing: .1em; }
-            .brand img { width: 48px; height: 48px; }
-            .form-shell { width: min(100% - 1rem, 940px); border-radius: 18px; }
+
+            .grid,
+            .choice-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .span-2 {
+                grid-column: auto;
+            }
+
+            .topbar {
+                padding: .75rem 1rem;
+            }
+
+            .brand {
+                letter-spacing: .1em;
+            }
+
+            .brand img {
+                width: 48px;
+                height: 48px;
+            }
+
+            .form-shell {
+                width: min(100% - 1rem, 940px);
+                border-radius: 18px;
+            }
         }
     </style>
 </head>
+
 <body>
     <header class="topbar">
         <a class="brand" href="/">
@@ -937,7 +1052,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             </div>
         <?php endif; ?>
 
-        <form id="registration-form" method="post" enctype="multipart/form-data" action="/register">
+        <form id="registration-form" method="post" enctype="multipart/form-data" action="/register" novalidate>
             <input type="hidden" name="_token" value="<?= escape($_SESSION['registration_token']) ?>">
             <div class="honeypot" aria-hidden="true">
                 <label for="website">Website</label>
@@ -949,35 +1064,35 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 <div class="grid">
                     <div class="span-2">
                         <label for="full_name">Full name <span class="required">*</span></label>
-                        <input id="full_name" name="full_name" value="<?= field('full_name') ?>" autocomplete="name" maxlength="120" required>
+                        <input id="full_name" name="full_name" value="<?= field('full_name') ?>" autocomplete="name" maxlength="120">
                     </div>
                     <div>
-                        <label for="preferred_name">Preferred name</label>
+                        <label for="preferred_name">Preferred name <span class="required">*</span></label>
                         <input id="preferred_name" name="preferred_name" value="<?= field('preferred_name') ?>" maxlength="80">
                     </div>
                     <div>
                         <label for="email">Email address <span class="required">*</span></label>
-                        <input id="email" name="email" type="email" value="<?= field('email') ?>" autocomplete="email" maxlength="190" required>
+                        <input id="email" name="email" type="email" value="<?= field('email') ?>" autocomplete="email" maxlength="190">
                     </div>
                     <div>
                         <label for="mobile_number">Mobile number <span class="required">*</span></label>
-                        <input id="mobile_number" name="mobile_number" type="tel" value="<?= field('mobile_number') ?>" autocomplete="tel" inputmode="tel" maxlength="30" pattern="\+?[0-9\s().-]{7,30}" required>
+                        <input id="mobile_number" name="mobile_number" type="tel" value="<?= field('mobile_number') ?>" autocomplete="tel" inputmode="tel" maxlength="30">
                     </div>
                     <div>
-                        <label for="whatsapp">WhatsApp number</label>
-                        <input id="whatsapp" name="whatsapp" type="tel" value="<?= field('whatsapp') ?>" inputmode="tel" maxlength="30" pattern="\+?[0-9\s().-]{7,30}">
+                        <label for="whatsapp">WhatsApp number <span class="required">*</span></label>
+                        <input id="whatsapp" name="whatsapp" type="tel" value="<?= field('whatsapp') ?>" inputmode="tel" maxlength="30">
                     </div>
                     <div>
-                        <label for="linkedin">LinkedIn profile</label>
+                        <label for="linkedin">LinkedIn profile <span class="required">*</span></label>
                         <input id="linkedin" name="linkedin" type="url" value="<?= field('linkedin') ?>" maxlength="255" placeholder="https://linkedin.com/in/...">
                     </div>
                     <div>
-                        <label for="instagram">Instagram / Snapchat</label>
+                        <label for="instagram">Instagram / Snapchat <span class="required">*</span></label>
                         <input id="instagram" name="instagram" value="<?= field('instagram') ?>" maxlength="80" placeholder="@username">
                     </div>
                     <div class="span-2">
                         <label for="member_photo">Clear applicant photograph <span class="required">*</span></label>
-                        <input id="member_photo" name="member_photo" type="file" accept="image/jpeg,image/png,image/webp" required>
+                        <input id="member_photo" name="member_photo" type="file" accept="image/jpeg,image/png,image/webp">
                         <p class="hint">JPG, PNG or WebP, up to 5 MB. This photograph will be attached to the registration email.</p>
                     </div>
                 </div>
@@ -988,19 +1103,19 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 <div class="grid">
                     <div class="span-2">
                         <label for="occupation">Occupation / Industry <span class="required">*</span></label>
-                        <input id="occupation" name="occupation" value="<?= field('occupation') ?>" maxlength="120" required>
+                        <input id="occupation" name="occupation" value="<?= field('occupation') ?>" maxlength="120">
                     </div>
                     <div>
-                        <label for="company_name">Company / Business name</label>
+                        <label for="company_name">Company / Business name <span class="required">*</span></label>
                         <input id="company_name" name="company_name" value="<?= field('company_name') ?>" maxlength="120">
                     </div>
                     <div>
-                        <label for="position">Position / Role</label>
+                        <label for="position">Position / Role <span class="required">*</span></label>
                         <input id="position" name="position" value="<?= field('position') ?>" maxlength="120">
                     </div>
                     <div class="span-2">
                         <label for="date_of_birth">Date of birth <span class="required">*</span></label>
-                        <input id="date_of_birth" name="date_of_birth" type="date" value="<?= field('date_of_birth') ?>" max="<?= date('Y-m-d', strtotime('-1 day')) ?>" required>
+                        <input id="date_of_birth" name="date_of_birth" type="date" value="<?= field('date_of_birth') ?>" max="<?= date('Y-m-d', strtotime('-1 day')) ?>">
                     </div>
                 </div>
             </fieldset>
@@ -1009,26 +1124,26 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 <legend><span class="section-number">3</span>Padel profile</legend>
                 <span class="label">Playing level <span class="required">*</span></span>
                 <div class="choice-grid">
-                    <label class="choice"><input type="radio" name="playing_level" value="beginner"<?= checked('playing_level', 'beginner') ?> required> Beginner</label>
-                    <label class="choice"><input type="radio" name="playing_level" value="intermediate"<?= checked('playing_level', 'intermediate') ?>> Intermediate</label>
-                    <label class="choice"><input type="radio" name="playing_level" value="advanced"<?= checked('playing_level', 'advanced') ?>> Advanced</label>
+                    <label class="choice"><input type="radio" name="playing_level" value="beginner" <?= checked('playing_level', 'beginner') ?>> Beginner</label>
+                    <label class="choice"><input type="radio" name="playing_level" value="intermediate" <?= checked('playing_level', 'intermediate') ?>> Intermediate</label>
+                    <label class="choice"><input type="radio" name="playing_level" value="advanced" <?= checked('playing_level', 'advanced') ?>> Advanced</label>
                 </div>
 
-                <span class="label" style="margin-top:1.5rem;">Club engagement</span>
+                <span class="label" style="margin-top:1.5rem;">Club engagement <span class="required">*</span></span>
                 <div class="choice-grid">
-                    <label class="choice"><input type="checkbox" name="club_engagement[]" value="social_play"<?= checked('club_engagement', 'social_play') ?>> Social play</label>
-                    <label class="choice"><input type="checkbox" name="club_engagement[]" value="competitive_matches"<?= checked('club_engagement', 'competitive_matches') ?>> Competitive matches</label>
-                    <label class="choice"><input type="checkbox" name="club_engagement[]" value="tournaments"<?= checked('club_engagement', 'tournaments') ?>> Tournaments</label>
-                    <label class="choice"><input type="checkbox" name="club_engagement[]" value="club_events"<?= checked('club_engagement', 'club_events') ?>> Club events</label>
+                    <label class="choice"><input type="checkbox" name="club_engagement[]" value="social_play" <?= checked('club_engagement', 'social_play') ?>> Social play</label>
+                    <label class="choice"><input type="checkbox" name="club_engagement[]" value="competitive_matches" <?= checked('club_engagement', 'competitive_matches') ?>> Competitive matches</label>
+                    <label class="choice"><input type="checkbox" name="club_engagement[]" value="tournaments" <?= checked('club_engagement', 'tournaments') ?>> Tournaments</label>
+                    <label class="choice"><input type="checkbox" name="club_engagement[]" value="club_events" <?= checked('club_engagement', 'club_events') ?>> Club events</label>
                 </div>
             </fieldset>
 
             <fieldset>
                 <legend><span class="section-number">4</span>Health &amp; liability declaration</legend>
                 <div class="declarations">
-                    <label class="declaration"><input type="checkbox" name="fitness_declaration" value="1"<?= checked('fitness_declaration') ?> required> I am physically fit to participate in padel activities.</label>
-                    <label class="declaration"><input type="checkbox" name="sport_acknowledgement" value="1"<?= checked('sport_acknowledgement') ?> required> I understand that padel is a physically demanding sport.</label>
-                    <label class="declaration"><input type="checkbox" name="liability_release" value="1"<?= checked('liability_release') ?> required> I release Lagos Padel Club from liability for injuries sustained during play.</label>
+                    <label class="declaration"><input type="checkbox" name="fitness_declaration" value="1" <?= checked('fitness_declaration') ?>> I am physically fit to participate in padel activities.</label>
+                    <label class="declaration"><input type="checkbox" name="sport_acknowledgement" value="1" <?= checked('sport_acknowledgement') ?>> I understand that padel is a physically demanding sport.</label>
+                    <label class="declaration"><input type="checkbox" name="liability_release" value="1" <?= checked('liability_release') ?>> I release Lagos Padel Club from liability for injuries sustained during play.</label>
                 </div>
             </fieldset>
 
@@ -1037,15 +1152,15 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 <div class="grid">
                     <div>
                         <label for="emergency_name">Name <span class="required">*</span></label>
-                        <input id="emergency_name" name="emergency_name" value="<?= field('emergency_name') ?>" maxlength="120" required>
+                        <input id="emergency_name" name="emergency_name" value="<?= field('emergency_name') ?>" maxlength="120">
                     </div>
                     <div>
                         <label for="emergency_relationship">Relationship <span class="required">*</span></label>
-                        <input id="emergency_relationship" name="emergency_relationship" value="<?= field('emergency_relationship') ?>" maxlength="80" required>
+                        <input id="emergency_relationship" name="emergency_relationship" value="<?= field('emergency_relationship') ?>" maxlength="80">
                     </div>
                     <div class="span-2">
                         <label for="emergency_phone">Phone <span class="required">*</span></label>
-                        <input id="emergency_phone" name="emergency_phone" type="tel" value="<?= field('emergency_phone') ?>" inputmode="tel" maxlength="30" pattern="\+?[0-9\s().-]{7,30}" required>
+                        <input id="emergency_phone" name="emergency_phone" type="tel" value="<?= field('emergency_phone') ?>" inputmode="tel" maxlength="30">
                     </div>
                 </div>
             </fieldset>
@@ -1054,31 +1169,31 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 <legend><span class="section-number">6</span>Membership details</legend>
                 <span class="label">Media consent <span class="required">*</span></span>
                 <div class="choice-grid">
-                    <label class="choice"><input type="radio" name="media_consent" value="yes"<?= checked('media_consent', 'yes') ?> required> Yes</label>
-                    <label class="choice"><input type="radio" name="media_consent" value="no"<?= checked('media_consent', 'no') ?>> No</label>
+                    <label class="choice"><input type="radio" name="media_consent" value="yes" <?= checked('media_consent', 'yes') ?>> Yes</label>
+                    <label class="choice"><input type="radio" name="media_consent" value="no" <?= checked('media_consent', 'no') ?>> No</label>
                 </div>
 
                 <span class="label" style="margin-top:1.5rem;">Admission pathway <span class="required">*</span></span>
                 <div class="choice-grid">
-                    <label class="choice"><input type="radio" name="admission_pathway" value="standard_admission"<?= checked('admission_pathway', 'standard_admission') ?> required> Standard admission</label>
-                    <label class="choice"><input type="radio" name="admission_pathway" value="curated_entry"<?= checked('admission_pathway', 'curated_entry') ?>> Curated entry</label>
+                    <label class="choice"><input type="radio" name="admission_pathway" value="standard_admission" <?= checked('admission_pathway', 'standard_admission') ?>> Standard admission</label>
+                    <label class="choice"><input type="radio" name="admission_pathway" value="curated_entry" <?= checked('admission_pathway', 'curated_entry') ?>> Curated entry</label>
                 </div>
 
                 <div class="grid" style="margin-top:1.5rem;">
                     <div class="span-2">
-                        <label for="inviting_member">Inviting member <span class="hint">(for standard admission)</span></label>
+                        <label for="inviting_member">Inviting member <span class="required">*</span></label>
                         <input id="inviting_member" name="inviting_member" value="<?= field('inviting_member') ?>" maxlength="120">
                     </div>
                     <div>
-                        <label for="supporting_member_1">Supporting member 1</label>
+                        <label for="supporting_member_1">Supporting member 1 <span class="required">*</span></label>
                         <input id="supporting_member_1" name="supporting_member_1" value="<?= field('supporting_member_1') ?>" maxlength="120">
                     </div>
                     <div>
-                        <label for="supporting_member_2">Supporting member 2</label>
+                        <label for="supporting_member_2">Supporting member 2 <span class="required">*</span></label>
                         <input id="supporting_member_2" name="supporting_member_2" value="<?= field('supporting_member_2') ?>" maxlength="120">
                     </div>
                     <div class="span-2">
-                        <label for="supporting_member_3">Supporting member 3</label>
+                        <label for="supporting_member_3">Supporting member 3 <span class="required">*</span></label>
                         <input id="supporting_member_3" name="supporting_member_3" value="<?= field('supporting_member_3') ?>" maxlength="120">
                     </div>
                 </div>
@@ -1087,17 +1202,24 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             <fieldset>
                 <legend><span class="section-number">7</span>Declaration</legend>
                 <label class="declaration">
-                    <input type="checkbox" name="club_declaration" value="1"<?= checked('club_declaration') ?> required>
+                    <input type="checkbox" name="club_declaration" value="1" <?= checked('club_declaration') ?>>
                     I agree to uphold the standards, culture and integrity of Lagos Padel Club. I understand that membership is selective and may be revoked if club standards are not maintained.
                 </label>
                 <div class="grid" style="margin-top:1.5rem;">
-                    <div>
-                        <label for="signature">Type your full name as signature <span class="required">*</span></label>
-                        <input id="signature" name="signature" value="<?= field('signature') ?>" maxlength="120" required>
+                    <div class="span-2">
+                        <span class="label">Signature <span class="required">*</span></span>
+                        <div class="signature-pad" id="signature-pad">
+                            <canvas class="signature-canvas" id="signature-canvas" aria-label="Signature pad" tabindex="0"></canvas>
+                            <div class="signature-actions">
+                                <p class="hint">Sign with your finger, mouse or trackpad.</p>
+                                <button class="signature-clear" type="button" id="signature-clear">Clear</button>
+                            </div>
+                        </div>
+                        <input id="signature_data" name="signature_data" type="hidden" value="<?= field('signature_data') ?>">
                     </div>
-                    <div>
+                    <div class="span-2">
                         <label for="declaration_date">Date <span class="required">*</span></label>
-                        <input id="declaration_date" name="declaration_date" type="date" value="<?= field('declaration_date') ?>" max="<?= date('Y-m-d') ?>" required>
+                        <input id="declaration_date" name="declaration_date" type="date" value="<?= field('declaration_date') ?>" max="<?= date('Y-m-d') ?>">
                     </div>
                 </div>
             </fieldset>
@@ -1110,18 +1232,24 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         (() => {
             const form = document.getElementById('registration-form');
             const serverErrors = <?= json_encode($fieldErrors, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
-            const sponsorshipFields = [
-                'inviting_member',
-                'supporting_member_1',
-                'supporting_member_2',
-                'supporting_member_3'
-            ];
+            const canvas = document.getElementById('signature-canvas');
+            const pad = document.getElementById('signature-pad');
+            const signatureInput = document.getElementById('signature_data');
+            const clearSignature = document.getElementById('signature-clear');
+            const context = canvas.getContext('2d');
+            let hasSignature = signatureInput.value !== '';
+            let isDrawing = false;
+            let lastPoint = null;
 
             const controlsFor = (name) => Array.from(form.querySelectorAll(
                 `[name="${CSS.escape(name)}"], [name="${CSS.escape(name)}[]"]`
             ));
 
             const errorHost = (control) => {
+                if (control.name === 'signature_data') {
+                    return pad.parentElement;
+                }
+
                 if (control.type === 'radio' || control.type === 'checkbox') {
                     return control.closest('.choice-grid, .declarations') || control.closest('fieldset');
                 }
@@ -1136,6 +1264,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                     const group = control.closest('.choice-grid, .declarations');
                     if (group) group.classList.remove('is-invalid');
                 });
+
+                if (name === 'signature_data') {
+                    pad.classList.remove('is-invalid');
+                    signatureInput.removeAttribute('aria-invalid');
+                }
 
                 form.querySelectorAll(`[data-error-for="${CSS.escape(name)}"]`).forEach((error) => error.remove());
             };
@@ -1152,6 +1285,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                     if (group) group.classList.add('is-invalid');
                 });
 
+                if (name === 'signature_data') {
+                    pad.classList.add('is-invalid');
+                    signatureInput.setAttribute('aria-invalid', 'true');
+                }
+
                 const error = document.createElement('p');
                 error.className = 'field-error';
                 error.dataset.errorFor = name;
@@ -1159,21 +1297,194 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                 errorHost(controls[0]).appendChild(error);
             };
 
-            const updateSponsorshipRequirements = () => {
-                const standard = form.querySelector('[name="admission_pathway"]:checked')?.value === 'standard_admission';
-                sponsorshipFields.forEach((name) => {
-                    const control = form.elements[name];
-                    control.required = standard;
-                    control.setAttribute('aria-required', standard ? 'true' : 'false');
-                    if (!standard) clearError(name);
-                });
+            const resizeCanvas = () => {
+                const ratio = Math.max(window.devicePixelRatio || 1, 1);
+                const rect = canvas.getBoundingClientRect();
+                const existing = signatureInput.value;
+
+                canvas.width = Math.floor(rect.width * ratio);
+                canvas.height = Math.floor(rect.height * ratio);
+                context.setTransform(ratio, 0, 0, ratio, 0, 0);
+                context.lineWidth = 2.5;
+                context.lineCap = 'round';
+                context.lineJoin = 'round';
+                context.strokeStyle = '#06163a';
+
+                if (existing) {
+                    const image = new Image();
+                    image.onload = () => context.drawImage(image, 0, 0, rect.width, rect.height);
+                    image.src = existing;
+                }
             };
 
+            const pointFromEvent = (event) => {
+                const rect = canvas.getBoundingClientRect();
+
+                return {
+                    x: event.clientX - rect.left,
+                    y: event.clientY - rect.top
+                };
+            };
+
+            const saveSignature = () => {
+                signatureInput.value = canvas.toDataURL('image/png');
+                hasSignature = true;
+                clearError('signature_data');
+            };
+
+            const clearSignatureCanvas = () => {
+                context.clearRect(0, 0, canvas.width, canvas.height);
+                signatureInput.value = '';
+                hasSignature = false;
+                clearError('signature_data');
+            };
+
+            const startDrawing = (event) => {
+                event.preventDefault();
+                isDrawing = true;
+                lastPoint = pointFromEvent(event);
+                canvas.setPointerCapture?.(event.pointerId);
+            };
+
+            const draw = (event) => {
+                if (!isDrawing || !lastPoint) return;
+
+                event.preventDefault();
+                const point = pointFromEvent(event);
+                context.beginPath();
+                context.moveTo(lastPoint.x, lastPoint.y);
+                context.lineTo(point.x, point.y);
+                context.stroke();
+                lastPoint = point;
+                saveSignature();
+            };
+
+            const stopDrawing = () => {
+                isDrawing = false;
+                lastPoint = null;
+            };
+
+            const requiredFields = {
+                full_name: 'Full name',
+                preferred_name: 'Preferred name',
+                email: 'Email address',
+                mobile_number: 'Mobile number',
+                whatsapp: 'WhatsApp number',
+                linkedin: 'LinkedIn profile',
+                instagram: 'Instagram / Snapchat',
+                occupation: 'Occupation / Industry',
+                company_name: 'Company / Business name',
+                position: 'Position / Role',
+                date_of_birth: 'Date of birth',
+                emergency_name: 'Emergency contact name',
+                emergency_relationship: 'Emergency contact relationship',
+                emergency_phone: 'Emergency contact phone',
+                inviting_member: 'Inviting member',
+                supporting_member_1: 'Supporting member 1',
+                supporting_member_2: 'Supporting member 2',
+                supporting_member_3: 'Supporting member 3',
+                declaration_date: 'Declaration date'
+            };
+
+            const clearClientErrors = () => Object.keys(requiredFields)
+                .concat([
+                    'member_photo', 'playing_level', 'club_engagement', 'media_consent',
+                    'admission_pathway', 'fitness_declaration', 'sport_acknowledgement',
+                    'liability_release', 'club_declaration', 'signature_data'
+                ])
+                .forEach(clearError);
+
+            const validPhone = (value) => /^\+?[0-9\s().-]{7,30}$/.test(value);
+            const validUrl = (value) => {
+                try {
+                    const url = new URL(value);
+                    return url.protocol === 'http:' || url.protocol === 'https:';
+                } catch {
+                    return false;
+                }
+            };
+            const validPastDate = (value) => value !== '' && new Date(`${value}T00:00:00`) < new Date(new Date().setHours(0, 0, 0, 0));
+            const validTodayOrEarlier = (value) => value !== '' && new Date(`${value}T00:00:00`) <= new Date(new Date().setHours(0, 0, 0, 0));
+
+            const validateForm = () => {
+                clearClientErrors();
+                let firstInvalid = null;
+                const invalidate = (name, message, focusTarget = null) => {
+                    showError(name, message);
+                    firstInvalid ||= focusTarget || controlsFor(name)[0];
+                };
+
+                Object.entries(requiredFields).forEach(([name, label]) => {
+                    if (String(form.elements[name]?.value || '').trim() === '') {
+                        invalidate(name, `${label} is required.`);
+                    }
+                });
+
+                const email = String(form.elements.email.value || '').trim();
+                if (email !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                    invalidate('email', 'Enter a valid email address.');
+                }
+
+                ['mobile_number', 'whatsapp', 'emergency_phone'].forEach((name) => {
+                    const value = String(form.elements[name].value || '').trim();
+                    if (value !== '' && !validPhone(value)) {
+                        invalidate(name, 'Enter a valid phone number.');
+                    }
+                });
+
+                const linkedin = String(form.elements.linkedin.value || '').trim();
+                if (linkedin !== '' && !validUrl(linkedin)) {
+                    invalidate('linkedin', 'Enter a complete LinkedIn URL beginning with http:// or https://.');
+                }
+
+                if (form.elements.date_of_birth.value && !validPastDate(form.elements.date_of_birth.value)) {
+                    invalidate('date_of_birth', 'Enter a valid date of birth in the past.');
+                }
+                if (form.elements.declaration_date.value && !validTodayOrEarlier(form.elements.declaration_date.value)) {
+                    invalidate('declaration_date', 'Declaration date cannot be in the future.');
+                }
+
+                ['playing_level', 'media_consent', 'admission_pathway'].forEach((name) => {
+                    if (!form.querySelector(`[name="${name}"]:checked`)) {
+                        invalidate(name, `Select a ${name.replace(/_/g, ' ')} option.`);
+                    }
+                });
+
+                if (!form.querySelector('[name="club_engagement[]"]:checked')) {
+                    invalidate('club_engagement', 'Select at least one club engagement option.');
+                }
+
+                ['fitness_declaration', 'sport_acknowledgement', 'liability_release', 'club_declaration'].forEach((name) => {
+                    if (!form.elements[name].checked) {
+                        invalidate(name, 'This declaration must be accepted.');
+                    }
+                });
+
+                const photo = form.elements.member_photo;
+                if (!photo.files.length) {
+                    invalidate('member_photo', 'Upload a clear photograph of the applicant.');
+                } else if (photo.files[0].size > 5 * 1024 * 1024) {
+                    invalidate('member_photo', 'The applicant photograph must be 5 MB or smaller.');
+                }
+
+                if (!hasSignature || !signatureInput.value) {
+                    invalidate('signature_data', 'Please sign inside the signature box.', canvas);
+                }
+
+                return firstInvalid;
+            };
+
+            resizeCanvas();
             Object.entries(serverErrors).forEach(([name, message]) => showError(name, message));
-            updateSponsorshipRequirements();
+            window.addEventListener('resize', resizeCanvas);
+            canvas.addEventListener('pointerdown', startDrawing);
+            canvas.addEventListener('pointermove', draw);
+            canvas.addEventListener('pointerup', stopDrawing);
+            canvas.addEventListener('pointercancel', stopDrawing);
+            canvas.addEventListener('pointerleave', stopDrawing);
+            clearSignature.addEventListener('click', clearSignatureCanvas);
 
             form.addEventListener('change', (event) => {
-                if (event.target.name === 'admission_pathway') updateSponsorshipRequirements();
                 if (event.target.name) clearError(event.target.name.replace('[]', ''));
             });
 
@@ -1182,41 +1493,21 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
             });
 
             form.addEventListener('submit', (event) => {
-                updateSponsorshipRequirements();
-                let firstInvalid = null;
-
-                const photo = form.elements.member_photo;
-                if (photo.files[0] && photo.files[0].size > 5 * 1024 * 1024) {
-                    photo.setCustomValidity('The applicant photograph must be 5 MB or smaller.');
-                } else {
-                    photo.setCustomValidity('');
-                }
-
-                const fullName = form.elements.full_name.value.trim().replace(/\s+/g, ' ').toLowerCase();
-                const signature = form.elements.signature.value.trim().replace(/\s+/g, ' ').toLowerCase();
-                form.elements.signature.setCustomValidity(
-                    fullName && signature && fullName !== signature
-                        ? 'Your typed signature must match your full name.'
-                        : ''
-                );
-
-                Array.from(form.elements).forEach((control) => {
-                    if (!control.name || control.disabled || control.type === 'hidden') return;
-
-                    if (!control.checkValidity()) {
-                        const name = control.name.replace('[]', '');
-                        showError(name, control.validationMessage);
-                        firstInvalid ||= control;
-                    }
-                });
+                const firstInvalid = validateForm();
 
                 if (firstInvalid) {
                     event.preventDefault();
-                    firstInvalid.focus({preventScroll: true});
-                    firstInvalid.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    firstInvalid.focus({
+                        preventScroll: true
+                    });
+                    firstInvalid.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'center'
+                    });
                 }
             });
         })();
     </script>
 </body>
+
 </html>
